@@ -4,7 +4,9 @@ import asyncio
 import re
 import threading
 from logging import Logger
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, ClassVar, List, Optional, Union
+
+from pydantic import PrivateAttr
 
 from semantic_kernel import Kernel
 from semantic_kernel.connectors.ai import CompleteRequestSettings
@@ -28,19 +30,19 @@ from semantic_kernel.utils.null_logger import NullLogger
 
 
 class Plan(SKFunctionBase):
-    _state: ContextVariables
-    _steps: List["Plan"]
-    _function: SKFunctionBase
-    _parameters: ContextVariables
-    _outputs: List[str]
-    _has_next_step: bool
-    _next_step_index: int
-    _name: str
-    _skill_name: str
-    _description: str
-    _is_semantic: bool
-    _request_settings: CompleteRequestSettings
-    DEFAULT_RESULT_KEY = "PLAN.RESULT"
+    _state: ContextVariables = PrivateAttr()
+    _steps: List["Plan"] = PrivateAttr()
+    _function: SKFunctionBase = PrivateAttr()
+    _parameters: ContextVariables = PrivateAttr()
+    _outputs: List[str] = PrivateAttr()
+    _has_next_step: bool = PrivateAttr()
+    _next_step_index: int = PrivateAttr()
+    _name: str = PrivateAttr()
+    _skill_name: str = PrivateAttr()
+    _description: str = PrivateAttr()
+    _is_semantic: bool = PrivateAttr()
+    _request_settings: CompleteRequestSettings = PrivateAttr()
+    DEFAULT_RESULT_KEY: ClassVar[str] = "PLAN.RESULT"
 
     @property
     def name(self) -> str:
@@ -101,6 +103,7 @@ class Plan(SKFunctionBase):
         steps: Optional[List["Plan"]] = None,
         function: Optional[SKFunctionBase] = None,
     ) -> None:
+        super().__init__()
         self._name = "" if name is None else name
         self._skill_name = "" if skill_name is None else skill_name
         self._description = "" if description is None else description
@@ -346,7 +349,7 @@ class Plan(SKFunctionBase):
         self, variables: ContextVariables, context: SKContext
     ) -> None:
         for key in variables.variables:
-            if not context.variables.contains_key(key):
+            if key not in context.variables:
                 context.variables.set(key, variables[key])
 
     def update_context_with_outputs(self, context: SKContext) -> None:
@@ -359,7 +362,7 @@ class Plan(SKFunctionBase):
         context.variables.update(result_string)
 
         for item in self._steps[self._next_step_index - 1]._outputs:
-            if self._state.contains_key(item):
+            if item in self._state:
                 context.variables.set(item, self._state[item])
             else:
                 context.variables.set(item, result_string)
@@ -376,14 +379,14 @@ class Plan(SKFunctionBase):
         # - Empty if sending to another plan
         # - Plan.Description
         input_string = ""
-        step_input_exists, step_input_value = step._parameters.get("input")
-        variables_input_exists, variables_input_value = variables.get("input")
-        state_input_exists, state_input_value = self._state.get("input")
-        if step_input_exists and step_input_value != "":
+        step_input_value = step._parameters.get("input")
+        variables_input_value = variables.get("input")
+        state_input_value = self._state.get("input")
+        if step_input_value and step_input_value != "":
             input_string = self.expand_from_variables(variables, step_input_value)
-        elif variables_input_exists and variables_input_value != "":
+        elif variables_input_value and variables_input_value != "":
             input_string = variables_input_value
-        elif state_input_exists and state_input_value != "":
+        elif state_input_value and state_input_value != "":
             input_string = state_input_value
         elif len(step._steps) > 0:
             input_string = ""
@@ -401,29 +404,29 @@ class Plan(SKFunctionBase):
             if param.name.lower() == variables._main_key.lower():
                 continue
 
-            if variables.contains_key(param.name):
+            if param.name in variables:
                 step_variables.set(param.name, variables[param.name])
-            elif self._state.contains_key(param.name) and (
+            elif param.name in self._state and (
                 self._state[param.name] is not None and self._state[param.name] != ""
             ):
                 step_variables.set(param.name, self._state[param.name])
 
         for param_var in step.parameters.variables:
-            if step_variables.contains_key(param_var):
+            if param_var in step_variables:
                 continue
 
             expanded_value = self.expand_from_variables(variables, param_var)
             if expanded_value.lower() == param_var.lower():
                 step_variables.set(param_var, step.parameters.variables[param_var])
-            elif variables.contains_key(param_var):
+            elif param_var in variables:
                 step_variables.set(param_var, variables[param_var])
-            elif self._state.contains_key(param_var):
+            elif param_var in self._state:
                 step_variables.set(param_var, self._state[param_var])
             else:
                 step_variables.set(param_var, expanded_value)
 
         for item in variables.variables:
-            if not step_variables.contains_key(item):
+            if item not in step_variables:
                 step_variables.set(item, variables[item])
 
         return step_variables
@@ -440,7 +443,7 @@ class Plan(SKFunctionBase):
 
         for match in ordered_matches:
             var_name = match.group("var")
-            if variables.contains_key(var_name):
+            if var_name in variables:
                 result = result.replace(f"${var_name}", variables[var_name])
 
         return result

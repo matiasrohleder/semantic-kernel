@@ -2,14 +2,15 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 
-namespace Microsoft.SemanticKernel.Plugins.Memory.Collections;
+namespace Microsoft.SemanticKernel.Memory;
 
 /// <summary>
 /// Structure for storing data which can be scored.
 /// </summary>
 /// <typeparam name="T">Data type.</typeparam>
-public readonly struct ScoredValue<T> : IComparable<ScoredValue<T>>, IEquatable<ScoredValue<T>>
+internal readonly struct ScoredValue<T> : IComparable<ScoredValue<T>>, IEquatable<ScoredValue<T>>
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="ScoredValue{T}"/> struct.
@@ -78,7 +79,7 @@ public readonly struct ScoredValue<T> : IComparable<ScoredValue<T>>, IEquatable<
     }
 
     /// <inheritdoc/>
-    public override bool Equals(object obj)
+    public override bool Equals([NotNullWhen(true)] object? obj)
     {
         return (obj is ScoredValue<T> other) && this.Equals(other);
     }

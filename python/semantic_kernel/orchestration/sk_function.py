@@ -3,10 +3,10 @@
 import asyncio
 import platform
 import sys
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from logging import Logger
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from semantic_kernel.connectors.ai.chat_completion_client_base import (
     ChatCompletionClientBase,
@@ -49,6 +49,7 @@ class SKFunction(SKFunctionBase):
     Semantic Kernel function.
     """
 
+    # TODO: rebuild with proper pydantic fields
     _parameters: List[ParameterView]
     _delegate_type: DelegateTypes
     _function: Callable[..., Any]
@@ -58,6 +59,7 @@ class SKFunction(SKFunctionBase):
     _ai_request_settings: CompleteRequestSettings
     _chat_service: Optional[ChatCompletionClientBase]
     _chat_request_settings: ChatRequestSettings
+    _chat_prompt_template: ChatPromptTemplate
 
     @staticmethod
     def from_native_method(method, skill_name="", log=None) -> "SKFunction":
@@ -77,7 +79,11 @@ class SKFunction(SKFunctionBase):
 
                 parameters.append(
                     ParameterView(
-                        param["name"], param["description"], param["default_value"]
+                        name=param["name"],
+                        description=param["description"],
+                        default_value=param["default_value"],
+                        type=param.get("type", "string"),
+                        required=param.get("required", False),
                     )
                 )
 
@@ -87,9 +93,11 @@ class SKFunction(SKFunctionBase):
             and method.__sk_function_input_description__ != ""
         ):
             input_param = ParameterView(
-                "input",
-                method.__sk_function_input_description__,
-                method.__sk_function_input_default_value__,
+                name="input",
+                description=method.__sk_function_input_description__,
+                default_value=method.__sk_function_input_default_value__,
+                type="string",
+                required=False,
             )
             parameters = [input_param] + parameters
 
@@ -115,41 +123,95 @@ class SKFunction(SKFunctionBase):
         if function_config is None:
             raise ValueError("Function configuration cannot be `None`")
 
-        async def _local_func(client, request_settings, context):
+        async def _local_func(client, request_settings, context: "SKContext", **kwargs):
             if client is None:
                 raise ValueError("AI LLM service cannot be `None`")
 
             try:
-                if function_config.has_chat_prompt:
-                    as_chat_prompt = cast(
-                        ChatPromptTemplate, function_config.prompt_template
-                    )
-
-                    # Similar to non-chat, render prompt (which renders to a
-                    # list of <role, content> messages)
-                    messages = await as_chat_prompt.render_messages_async(context)
-                    completion = await client.complete_chat_async(
-                        messages, request_settings
-                    )
-
-                    # Add the last message from the rendered chat prompt
-                    # (which will be the user message) and the response
-                    # from the model (the assistant message)
-                    _, content = messages[-1]
-                    as_chat_prompt.add_user_message(content)
-                    as_chat_prompt.add_assistant_message(completion)
-
-                    # Update context
-                    context.variables.update(completion)
-                else:
+                if not function_config.has_chat_prompt:
                     prompt = await function_config.prompt_template.render_async(context)
                     completion = await client.complete_async(prompt, request_settings)
                     context.variables.update(completion)
+                    return context
             except Exception as e:
                 # TODO: "critical exceptions"
                 context.fail(str(e), e)
+                return context
 
-            return context
+            as_chat_prompt = function_config.prompt_template
+            # Similar to non-chat, render prompt (which renders to a
+            # dict of <role, content, name> messages)
+            messages = await as_chat_prompt.render_messages_async(context)
+
+            functions = (
+                kwargs.get("functions")
+                if request_settings.function_call is not None
+                else None
+            )
+            if request_settings.function_call is not None and functions is None:
+                log.warning("Function call is not None, but functions is None")
+            try:
+                if functions and hasattr(client, "complete_chat_with_functions_async"):
+                    if (
+                        hasattr(client, "complete_chat_with_data_async")
+                        and hasattr(request_settings, "data_source_settings")
+                        and request_settings.data_source_settings is not None
+                    ):
+                        (
+                            completion,
+                            tool_message,
+                            function_call,
+                        ) = await client.complete_chat_with_data_async(
+                            messages, request_settings, functions=functions
+                        )
+                        if tool_message:
+                            context.objects["tool_message"] = tool_message
+                            as_chat_prompt.add_message(
+                                role="tool", message=tool_message
+                            )
+                    else:
+                        (
+                            completion,
+                            function_call,
+                        ) = await client.complete_chat_with_functions_async(
+                            messages, functions, request_settings
+                        )
+
+                    as_chat_prompt.add_message(
+                        "assistant", message=completion, function_call=function_call
+                    )
+                    if completion is not None:
+                        context.variables.update(completion)
+                    if function_call is not None:
+                        context.objects["function_call"] = function_call
+                else:
+                    if (
+                        hasattr(client, "complete_chat_with_data_async")
+                        and hasattr(request_settings, "data_source_settings")
+                        and request_settings.data_source_settings is not None
+                    ):
+                        # third item is function_call, None in this case
+                        (
+                            completion,
+                            tool_message,
+                            _,
+                        ) = await client.complete_chat_with_data_async(
+                            messages, request_settings
+                        )
+                        context.objects["tool_message"] = tool_message
+                        as_chat_prompt.add_message(role="tool", message=tool_message)
+                    else:
+                        completion = await client.complete_chat_async(
+                            messages, request_settings
+                        )
+
+                    as_chat_prompt.add_assistant_message(completion)
+                    context.variables.update(completion)
+            except Exception as exc:
+                # TODO: "critical exceptions"
+                context.fail(str(exc), exc)
+            finally:
+                return context
 
         async def _local_stream_func(client, request_settings, context):
             if client is None:
@@ -157,38 +219,50 @@ class SKFunction(SKFunctionBase):
 
             try:
                 if function_config.has_chat_prompt:
-                    as_chat_prompt = cast(
-                        ChatPromptTemplate, function_config.prompt_template
-                    )
+                    chat_prompt = function_config.prompt_template
 
                     # Similar to non-chat, render prompt (which renders to a
                     # list of <role, content> messages)
                     completion = ""
-                    messages = await as_chat_prompt.render_messages_async(context)
-                    async for steam_message in client.complete_chat_stream_async(
-                        messages, request_settings
+                    messages = await chat_prompt.render_messages_async(context)
+
+                    # With data case - stream and get the tool message for citations
+                    if (
+                        hasattr(client, "complete_chat_with_data_async")
+                        and hasattr(request_settings, "data_source_settings")
+                        and request_settings.data_source_settings is not None
                     ):
-                        completion += steam_message
-                        yield steam_message
+                        response = await client.complete_chat_stream_with_data_async(
+                            messages, request_settings
+                        )
+                        # Get the tool message
+                        tool_message = await response.get_tool_message()
+                        if tool_message:
+                            chat_prompt.add_message(role="tool", message=tool_message)
+                            context.objects["tool_message"] = tool_message
+                        # Get the completion
+                        async for partial_content in response:
+                            completion += partial_content
+                            yield partial_content
 
-                    # Add the last message from the rendered chat prompt
-                    # (which will be the user message) and the response
-                    # from the model (the assistant message)
-                    _, content = messages[-1]
-                    as_chat_prompt.add_user_message(content)
-                    as_chat_prompt.add_assistant_message(completion)
-
-                    # Update context
+                    else:
+                        async for partial_content in client.complete_chat_stream_async(
+                            messages, request_settings
+                        ):
+                            completion += partial_content
+                            yield partial_content
+                    # Use the full completion to update the chat_prompt_template and context
+                    chat_prompt.add_assistant_message(completion)
                     context.variables.update(completion)
                 else:
                     prompt = await function_config.prompt_template.render_async(context)
 
                     completion = ""
-                    async for stream_message in client.complete_stream_async(
+                    async for partial_content in client.complete_stream_async(
                         prompt, request_settings
                     ):
-                        completion += stream_message
-                        yield stream_message
+                        completion += partial_content
+                        yield partial_content
                     context.variables.update(completion)
             except Exception as e:
                 # TODO: "critical exceptions"
@@ -204,6 +278,9 @@ class SKFunction(SKFunctionBase):
             function_name=function_name,
             is_semantic=True,
             log=log,
+            chat_prompt_template=function_config.prompt_template
+            if function_config.has_chat_prompt
+            else None,
         )
 
     @property
@@ -245,7 +322,9 @@ class SKFunction(SKFunctionBase):
         is_semantic: bool,
         log: Optional[Logger] = None,
         delegate_stream_function: Optional[Callable[..., Any]] = None,
+        **kwargs: Dict[str, Any],
     ) -> None:
+        super().__init__()
         self._delegate_type = delegate_type
         self._function = delegate_function
         self._parameters = parameters
@@ -260,6 +339,7 @@ class SKFunction(SKFunctionBase):
         self._ai_request_settings = CompleteRequestSettings()
         self._chat_service = None
         self._chat_request_settings = ChatRequestSettings()
+        self._chat_prompt_template = kwargs.get("chat_prompt_template", None)
 
     def set_default_skill_collection(
         self, skills: ReadOnlySkillCollectionBase
@@ -356,18 +436,21 @@ class SKFunction(SKFunctionBase):
         if input is not None:
             context.variables.update(input)
 
-        # Check if there is an event loop
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
+        loop = (
+            asyncio.get_running_loop()
+            if asyncio.get_event_loop().is_running()
+            else None
+        )
 
-        # Handle "asyncio.run() cannot be called from a running event loop"
         if loop and loop.is_running():
-            if self.is_semantic:
-                return self._runThread(self._invoke_semantic_async(context, settings))
-            else:
-                return self._runThread(self._invoke_native_async(context))
+            coroutine_function = (
+                self._invoke_semantic_async
+                if self.is_semantic
+                else self._invoke_native_async
+            )
+            return self.run_async_in_executor(
+                lambda: coroutine_function(context, settings)
+            )
         else:
             if self.is_semantic:
                 return asyncio.run(self._invoke_semantic_async(context, settings))
@@ -382,6 +465,7 @@ class SKFunction(SKFunctionBase):
         memory: Optional[SemanticTextMemoryBase] = None,
         settings: Optional[CompleteRequestSettings] = None,
         log: Optional[Logger] = None,
+        **kwargs: Dict[str, Any],
     ) -> "SKContext":
         from semantic_kernel.orchestration.sk_context import SKContext
 
@@ -406,14 +490,14 @@ class SKFunction(SKFunctionBase):
 
         try:
             if self.is_semantic:
-                return await self._invoke_semantic_async(context, settings)
+                return await self._invoke_semantic_async(context, settings, **kwargs)
             else:
-                return await self._invoke_native_async(context)
+                return await self._invoke_native_async(context, **kwargs)
         except Exception as e:
             context.fail(str(e), e)
             return context
 
-    async def _invoke_semantic_async(self, context, settings):
+    async def _invoke_semantic_async(self, context: "SKContext", settings, **kwargs):
         self._verify_is_semantic()
 
         self._ensure_context_has_skills(context)
@@ -432,7 +516,9 @@ class SKFunction(SKFunctionBase):
         service = (
             self._ai_service if self._ai_service is not None else self._chat_service
         )
-        new_context = await self._function(service, settings, context)
+        new_context = await self._function(
+            service, settings, context, functions=kwargs.get("functions", None)
+        )
         context.variables.merge_or_overwrite(new_context.variables)
         return context
 
@@ -539,9 +625,21 @@ class SKFunction(SKFunctionBase):
             yield stream_msg
 
     async def _invoke_native_stream_async(self, context):
-        result = await self._invoke_native_async(context)
+        self._verify_is_native()
 
-        yield result
+        self._ensure_context_has_skills(context)
+
+        delegate = DelegateHandlers.get_handler(self._delegate_type)
+        # for python3.9 compatibility (staticmethod is not callable)
+        if not hasattr(delegate, "__call__"):
+            delegate = delegate.__func__
+
+        completion = ""
+        async for partial in delegate(self._function, context):
+            completion += partial
+            yield partial
+
+        context.variables.update(completion)
 
     def _ensure_context_has_skills(self, context) -> None:
         if context.skills is not None:
@@ -557,12 +655,24 @@ class SKFunction(SKFunctionBase):
     event loops such as Jupyter notebooks.
     """
 
-    def _runThread(self, code: Callable):
-        result = []
-        thread = threading.Thread(target=self._runCode, args=(code, result))
-        thread.start()
-        thread.join()
-        return result[0]
+    def run_async_in_executor(self, coroutine_func: Callable[[], Any]) -> Any:
+        """
+        A unified method for async execution for more efficient and safer thread management
 
-    def _runCode(self, code: Callable, result: List[Any]) -> None:
-        result.append(asyncio.run(code))
+        Arguments:
+            coroutine_func {Callable[[], Any]} -- The coroutine to run
+
+        Returns:
+            Any -- The result of the coroutine
+        """
+
+        def run_async_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(coroutine_func())
+            loop.close()
+            return result
+
+        with ThreadPoolExecutor() as executor:
+            future = executor.submit(run_async_in_thread)
+            return future.result()

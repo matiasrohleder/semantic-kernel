@@ -1,9 +1,12 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 if TYPE_CHECKING:
+    from semantic_kernel.connectors.ai.open_ai.semantic_functions.open_ai_chat_prompt_template_with_data_config import (
+        OpenAIChatPromptTemplateWithDataConfig,
+    )
     from semantic_kernel.semantic_functions.prompt_template_config import (
         PromptTemplateConfig,
     )
@@ -19,6 +22,12 @@ class ChatRequestSettings:
     max_tokens: int = 256
     token_selection_biases: Dict[int, int] = field(default_factory=dict)
     stop_sequences: List[str] = field(default_factory=list)
+    function_call: Optional[str] = None
+    data_source_settings: Optional[
+        "OpenAIChatPromptTemplateWithDataConfig.AzureChatWithDataSettings"
+    ] = None
+    inputLanguage: Optional[str] = None
+    outputLanguage: Optional[str] = None
 
     def update_from_completion_config(
         self, completion_config: "PromptTemplateConfig.CompletionConfig"
@@ -31,6 +40,17 @@ class ChatRequestSettings:
         self.presence_penalty = completion_config.presence_penalty
         self.frequency_penalty = completion_config.frequency_penalty
         self.token_selection_biases = completion_config.token_selection_biases
+        self.function_call = (
+            completion_config.function_call
+            if hasattr(completion_config, "function_call")
+            else None
+        )
+        if hasattr(completion_config, "data_source_settings"):
+            self.data_source_settings = completion_config.data_source_settings
+        if hasattr(completion_config, "inputLanguage"):
+            self.inputLanguage = completion_config.inputLanguage
+        if hasattr(completion_config, "outputLanguage"):
+            self.outputLanguage = completion_config.outputLanguage
 
     @staticmethod
     def from_completion_config(

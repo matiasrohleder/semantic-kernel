@@ -2,7 +2,7 @@
 
 from abc import abstractmethod
 from logging import Logger
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from semantic_kernel.connectors.ai.complete_request_settings import (
     CompleteRequestSettings,
@@ -12,7 +12,7 @@ from semantic_kernel.connectors.ai.text_completion_client_base import (
 )
 from semantic_kernel.memory.semantic_text_memory_base import SemanticTextMemoryBase
 from semantic_kernel.orchestration.context_variables import ContextVariables
-from semantic_kernel.sk_pydantic import PydanticField
+from semantic_kernel.sk_pydantic import SKBaseModel
 from semantic_kernel.skill_definition.function_view import FunctionView
 
 if TYPE_CHECKING:
@@ -22,10 +22,10 @@ if TYPE_CHECKING:
     )
 
 
-class SKFunctionBase(PydanticField):
-    FUNCTION_PARAM_NAME_REGEX = r"^[0-9A-Za-z_]*$"
-    FUNCTION_NAME_REGEX = r"^[0-9A-Za-z_]*$"
-    SKILL_NAME_REGEX = r"^[0-9A-Za-z_]*$"
+class SKFunctionBase(SKBaseModel):
+    FUNCTION_PARAM_NAME_REGEX: str = r"^[0-9A-Za-z_]*$"
+    FUNCTION_NAME_REGEX: str = r"^[0-9A-Za-z_]*$"
+    SKILL_NAME_REGEX: str = r"^[0-9A-Za-z_]*$"
 
     @property
     @abstractmethod
@@ -133,6 +133,7 @@ class SKFunctionBase(PydanticField):
         memory: Optional[SemanticTextMemoryBase] = None,
         settings: Optional[CompleteRequestSettings] = None,
         log: Optional[Logger] = None,
+        **kwargs: Dict[str, Any],
     ) -> "SKContext":
         """
         Invokes the function with an explicit string input
