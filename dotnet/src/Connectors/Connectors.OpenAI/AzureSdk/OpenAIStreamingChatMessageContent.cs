@@ -31,7 +31,7 @@ public sealed class OpenAIStreamingChatMessageContent : StreamingChatMessageCont
         StreamingChatCompletionsUpdate chatUpdate,
         int choiceIndex,
         string modelId,
-        Dictionary<string, object?>? metadata = null)
+        IReadOnlyDictionary<string, object?>? metadata = null)
         : base(
             chatUpdate.Role.HasValue ? new AuthorRole(chatUpdate.Role.Value.ToString()) : null,
             chatUpdate.ContentUpdate,
@@ -58,11 +58,11 @@ public sealed class OpenAIStreamingChatMessageContent : StreamingChatMessageCont
     internal OpenAIStreamingChatMessageContent(
         AuthorRole? authorRole,
         string? content,
-        ChatCompletionsToolCall? tootToolCallUpdate = null,
+        StreamingToolCallUpdate? tootToolCallUpdate = null,
         CompletionsFinishReason? completionsFinishReason = null,
         int choiceIndex = 0,
         string? modelId = null,
-        Dictionary<string, object?>? metadata = null)
+        IReadOnlyDictionary<string, object?>? metadata = null)
         : base(
             authorRole,
             content,
@@ -77,7 +77,7 @@ public sealed class OpenAIStreamingChatMessageContent : StreamingChatMessageCont
     }
 
     /// <summary>Gets any update information in the message about a tool call.</summary>
-    public ChatCompletionsToolCall? ToolCallUpdate { get; }
+    public StreamingToolCallUpdate? ToolCallUpdate { get; }
 
     /// <inheritdoc/>
     public override byte[] ToByteArray() => this.Encoding.GetBytes(this.ToString());
