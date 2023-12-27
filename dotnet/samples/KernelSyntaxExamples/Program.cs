@@ -83,8 +83,8 @@ public static class Program
             .AddJsonFile("appsettings.Development.json", true)
             .AddJsonFile(path: "testsettings.json", optional: false, reloadOnChange: true)
             .AddJsonFile(path: "testsettings.development.json", optional: true, reloadOnChange: true)
-            .AddEnvironmentVariables()
-            .AddUserSecrets<Env>()
+            // .AddEnvironmentVariables()
+            // .AddUserSecrets<Env>()
             .Build();
         TestConfiguration.Initialize(configRoot);
     }
