@@ -368,9 +368,7 @@
         "${workspaceFolder}/dotnet/samples/KernelSyntaxExamples/KernelSyntaxExamples.csproj",
         "/property:GenerateFullPaths=true",
         "/consoleloggerparameters:NoSummary",
-        "/property:DebugType=portable",
-        "--no-dependencies",
-        "--no-restore"
+        "/property:DebugType=portable"
       ],
       "problemMatcher": "$msCompile",
       "group": "build"
