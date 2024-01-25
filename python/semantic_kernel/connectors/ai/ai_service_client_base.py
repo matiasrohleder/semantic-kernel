@@ -1,13 +1,20 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+import sys
 from abc import ABC
 
-from pydantic import constr
+if sys.version_info >= (3, 9):
+    from typing import Annotated
+else:
+    from typing_extensions import Annotated
 
-from semantic_kernel.sk_pydantic import SKBaseModel
+from pydantic import StringConstraints
+
+from semantic_kernel.connectors.ai.ai_request_settings import AIRequestSettings
+from semantic_kernel.kernel_pydantic import KernelBaseModel
 
 
-class AIServiceClientBase(SKBaseModel, ABC):
+class AIServiceClientBase(KernelBaseModel, ABC):
     """Base class for all AI Services.
 
     Has a ai_model_id, any other fields have to be defined by the subclasses.
@@ -16,4 +23,15 @@ class AIServiceClientBase(SKBaseModel, ABC):
     or can just be a string that is used to identify the service.
     """
 
-    ai_model_id: constr(strip_whitespace=True, min_length=1)
+    ai_model_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+    def get_request_settings_class(self) -> "AIRequestSettings":
+        """Get the request settings class."""
+        return AIRequestSettings  # pragma: no cover
+
+    def instantiate_request_settings(self, **kwargs) -> "AIRequestSettings":
+        """Create a request settings object.
+
+        All arguments are passed to the constructor of the request settings object.
+        """
+        return self.get_request_settings_class()(**kwargs)
